@@ -31,6 +31,10 @@ func NewPostgresStore(url, tableName string) (*PostgresStore, error) {
 		return nil, errors.Wrap(err, "unable to open a postgres connection")
 	}
 
+	db.SetMaxIdleConns(10)
+	db.SetMaxOpenConns(30)
+	db.SetConnMaxLifetime(10 * time.Minute)
+
 	return &PostgresStore{
 		db:        db,
 		tableName: tableName,
