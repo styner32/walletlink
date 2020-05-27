@@ -24,9 +24,9 @@ type subscriberLock struct {
 // PubSub - pub/sub interface for message senders
 type PubSub struct {
 	lock     *sync.Mutex
-	subMap   map[string]subscriberSet       // Subscription ID -> Subscribers
-	idMap    map[Subscriber]util.StringSet  // Subscriber -> Subscription IDs
-	subLocks map[Subscriber]*subscriberLock // Subscriber -> mutex lock
+	subMap   map[string]subscriberSet      // Subscription ID -> Subscribers
+	idMap    map[Subscriber]util.StringSet // Subscriber -> Subscription IDs
+	subLocks *sync.Map                     // Subscriber -> mutex lock
 }
 
 // NewPubSub - construct a PubSub
@@ -35,7 +35,7 @@ func NewPubSub() *PubSub {
 		lock:     &sync.Mutex{},
 		subMap:   map[string]subscriberSet{},
 		idMap:    map[Subscriber]util.StringSet{},
-		subLocks: map[Subscriber]*subscriberLock{},
+		subLocks: &sync.Map{},
 	}
 }
 
@@ -59,11 +59,11 @@ func (cm *PubSub) Subscribe(id string, subscriber Subscriber) {
 		cm.idMap[subscriber] = ids
 	}
 
-	if _, ok := cm.subLocks[subscriber]; !ok {
-		cm.subLocks[subscriber] = &subscriberLock{
+	if _, ok := cm.subLocks.Load(subscriber); !ok {
+		cm.subLocks.Store(subscriber, &subscriberLock{
 			IsUnsubcribed: false,
 			Lock:          &sync.Mutex{},
-		}
+		})
 	}
 
 	subscribers[subscriber] = struct{}{}
@@ -101,8 +101,8 @@ func (cm *PubSub) UnsubscribeAll(subscriber Subscriber) int {
 		cm.unsubscribeOne(id, subscriber)
 	}
 
-	if _, ok = cm.subLocks[subscriber]; ok {
-		delete(cm.subLocks, subscriber)
+	if _, ok = cm.subLocks.Load(subscriber); ok {
+		cm.subLocks.Delete(subscriber)
 	}
 
 	return idsLen
@@ -141,8 +141,14 @@ func (cm *PubSub) Publish(id string, msg interface{}) int {
 	for subscriber := range subscribers {
 		subscriber := subscriber
 		go func() {
-			subLock, ok := cm.subLocks[subscriber]
+			v, ok := cm.subLocks.Load(subscriber)
 			if !ok {
+				return
+			}
+
+			subLock, ok := v.(*subscriberLock)
+			if !ok {
+				log.Println("invalid sub lock")
 				return
 			}
 
@@ -161,8 +167,14 @@ func (cm *PubSub) Publish(id string, msg interface{}) int {
 }
 
 func (cm *PubSub) unsubscribeOne(id string, subscriber Subscriber) {
-	subLock, ok := cm.subLocks[subscriber]
+	v, ok := cm.subLocks.Load(subscriber)
 	if !ok {
+		return
+	}
+
+	subLock, ok := v.(*subscriberLock)
+	if !ok {
+		log.Println("invalid sub lock")
 		return
 	}
 
